@@ -609,6 +609,7 @@ GtkApi* gtk3_load(JNIEnv *env, const char* lib_name)
         fp_g_variant_lookup_value = dl_symbol("g_variant_lookup_value");
         fp_g_variant_iter_init = dl_symbol("g_variant_iter_init");
         fp_g_variant_iter_n_children = dl_symbol("g_variant_iter_n_children");
+        fp_g_variant_print = dl_symbol("g_variant_print");
 
         fp_g_string_new = dl_symbol("g_string_new");
         fp_g_string_erase = dl_symbol("g_string_erase");
@@ -3102,6 +3103,7 @@ static void gtk3_init(GtkApi* gtk) {
     gtk->g_variant_new_string = fp_g_variant_new_string;
     gtk->g_variant_new_boolean = fp_g_variant_new_boolean;
     gtk->g_variant_new_uint32 = fp_g_variant_new_uint32;
+    gtk->g_variant_print = fp_g_variant_print;
 
     gtk->g_variant_get = fp_g_variant_get;
     gtk->g_variant_get_string = fp_g_variant_get_string;

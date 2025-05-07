@@ -738,6 +738,8 @@ static GVariant *(*fp_g_variant_new_boolean)(gboolean value);
 
 static GVariant *(*fp_g_variant_new_uint32)(guint32 value);
 
+static gchar *(*fp_g_variant_print) (GVariant* value, gboolean type_annotate);
+
 static void (*fp_g_variant_get)(GVariant *value,
                                 const gchar *format_string,
                                 ...);

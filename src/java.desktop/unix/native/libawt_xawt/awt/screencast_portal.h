@@ -48,8 +48,14 @@ gboolean initXdgDesktopPortal();
 
 void errHandle(GError *error, const gchar *functionName, int lineNum);
 
+void remoteDesktopMouseMove(int x, int y);
+void remoteDesktopMouseWheel(int wheelAmt);
+void remoteDesktopMouse(gboolean isPress, int buttons);
+void remoteDesktopKey(gboolean isPress, int key);
+
 struct XdgDesktopPortalApi {
     GDBusConnection *connection;
+    GDBusProxy *remoteDesktopProxy;
     GDBusProxy *screenCastProxy;
     gchar *senderName;
     char *screenCastSessionHandle;

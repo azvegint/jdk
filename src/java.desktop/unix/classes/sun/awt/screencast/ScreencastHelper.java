@@ -48,9 +48,9 @@ import java.util.stream.IntStream;
 
 public class ScreencastHelper {
 
-    static final boolean SCREENCAST_DEBUG;
+    static final boolean IS_DEBUG;
     private static final boolean IS_NATIVE_LOADED;
-
+    private static final String SKIP = "<SKIP>"; //TODO really needed?
 
     private static final int ERROR = -1;
     private static final int DENIED = -11;
@@ -63,17 +63,21 @@ public class ScreencastHelper {
             = new Timer("auto-close screencast session", true);
 
 
-    private ScreencastHelper() {
-    }
+    private ScreencastHelper() {}
 
     static {
-        SCREENCAST_DEBUG = Boolean.getBoolean("awt.robot.screenshotDebug");
+        IS_DEBUG = Boolean.getBoolean("awt.robot.screenshotDebug");
 
         boolean loadFailed = false;
 
+        boolean shouldLoadNative = XdgDesktopPortal.isRemoteDesktop()
+                || XdgDesktopPortal.isScreencast();
+
+        int methodId = XdgDesktopPortal.isScreencast() ? 0 : 1;
+
         if (!(Toolkit.getDefaultToolkit() instanceof UNIXToolkit tk
               && tk.loadGTK())
-              || !loadPipewire(SCREENCAST_DEBUG)) {
+              || !(shouldLoadNative && loadPipewire(methodId, IS_DEBUG))) { //TODO
 
             System.err.println(
                     "Could not load native libraries for ScreencastHelper"
@@ -89,7 +93,7 @@ public class ScreencastHelper {
         return IS_NATIVE_LOADED;
     }
 
-    private static native boolean loadPipewire(boolean screencastDebug);
+    private static native boolean loadPipewire(int method, boolean isDebug);
 
     private static native int getRGBPixelsImpl(
             int x, int y, int width, int height,
@@ -150,13 +154,13 @@ public class ScreencastHelper {
                 .filter(captureArea::intersects)
                 .toList();
 
-        if (SCREENCAST_DEBUG) {
+        if (IS_DEBUG) {
             System.out.printf("// getRGBPixels in %s, affectedScreenBounds %s\n",
                     captureArea, affectedScreenBounds);
         }
 
         if (affectedScreenBounds.isEmpty()) {
-            if (SCREENCAST_DEBUG) {
+            if (IS_DEBUG) {
                 System.out.println("// getRGBPixels - requested area "
                         + "outside of any screen");
             }
@@ -210,15 +214,71 @@ public class ScreencastHelper {
                     "Screen Capture in the selected area was not allowed"
             );
         } else if (retVal == ERROR) {
-            if (SCREENCAST_DEBUG) {
+            if (IS_DEBUG) {
                 System.err.println("Screen capture failed.");
             }
         } else if (retVal == OUT_OF_BOUNDS) {
-            if (SCREENCAST_DEBUG) {
+            if (IS_DEBUG) {
                 System.err.println(
                         "Token does not provide access to requested area.");
             }
         }
         return retVal != ERROR;
     }
+
+    private static String refreshSessionGetToken() {
+        //TODO throw exception?
+        if (!XdgDesktopPortal.isRemoteDesktop() && IS_NATIVE_LOADED) return SKIP;
+
+        timerCloseSessionRestart();
+
+        TokenItem firstToken = TokenStorage.getFirstToken(); // TODO token logic update?
+
+        return firstToken != null
+                ? firstToken.token
+                : null;
+    }
+
+    public static synchronized void remoteDesktopMouseMove(int x, int y) { //TODO check if needed synchronized
+        String token = refreshSessionGetToken();
+
+        if (SKIP.equals(token)) {
+            return;
+        }
+
+        remoteDesktopMouseMoveImpl(x, y, token);
+    }
+
+    public static synchronized void remoteDesktopMouseButton(boolean isPress, int buttons) {
+        String token = refreshSessionGetToken();
+
+        if (SKIP.equals(token)) {
+            return;
+        }
+        remoteDesktopMouseButtonImpl(isPress, buttons, token);
+    }
+
+    public static synchronized void remoteDesktopMouseWheel(int wheel) {
+        String token = refreshSessionGetToken();
+        if (SKIP.equals(token)) {
+            return;
+        }
+        remoteDesktopMouseWheelImpl(wheel, token);
+    }
+
+    public static synchronized void remoteDesktopKey(boolean isPress, int key) {
+        String token = refreshSessionGetToken();
+        if (SKIP.equals(token)) {
+            return;
+        }
+
+        remoteDesktopKeyImpl(isPress, key, token);
+    }
+
+
+    //TODO ret value needed?
+    private static synchronized native int remoteDesktopMouseMoveImpl(int x, int y, String token); //TODO naming
+    private static synchronized native int remoteDesktopMouseButtonImpl(boolean isPress, int buttons, String token);
+    private static synchronized native int remoteDesktopMouseWheelImpl(int wheelAmt, String token);
+    private static synchronized native int remoteDesktopKeyImpl(boolean isPress, int key, String token);
 }

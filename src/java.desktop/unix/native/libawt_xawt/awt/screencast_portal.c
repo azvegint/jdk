@@ -30,12 +30,15 @@
 #include <pwd.h>
 #include <unistd.h>
 
+#include "java_awt_event_InputEvent.h"
+
 #ifndef _AIX
 #include "screencast_pipewire.h"
 
 #include "screencast_portal.h"
 
 extern volatile bool isGtkMainThread;
+extern gboolean isRemoteDesktop;
 
 extern struct ScreenSpace screenSpace;
 
@@ -195,6 +198,8 @@ gboolean checkVersion() {
 
         ERR_HANDLE(error);
 
+        print_gvariant_content(retVersion); //TODO
+
         GVariant *varVersion = NULL;
         gtk->g_variant_get(retVersion, "(v)", &varVersion);
 
@@ -212,7 +217,7 @@ gboolean checkVersion() {
 
     }
 
-    DEBUG_SCREENCAST("ScreenCast protocol version %d\n", version);
+    DEBUG_SCREENCAST("ScreenCast protocol version %d\n\n\n", version); //TODO
     if (version < 4) {
         DEBUG_SCREENCAST("!!! ScreenCast protocol version %d < 4,"
                          " session restore is not available\n",
@@ -246,6 +251,7 @@ gboolean initXdgDesktopPortal() {
 
     const gchar *name = gtk
             ->g_dbus_connection_get_unique_name(portal->connection);
+
     if (!name) {
         ERR("Failed to get unique connection name\n");
         return FALSE;
@@ -258,9 +264,7 @@ gboolean initXdgDesktopPortal() {
 
     gtk->g_string_free(nameStr, FALSE);
 
-    DEBUG_SCREENCAST("connection/sender name %s / %s\n",
-                     name,
-                     portal->senderName);
+    err = NULL;
 
     portal->screenCastProxy = gtk->g_dbus_proxy_new_sync(
             portal->connection,
@@ -277,9 +281,36 @@ gboolean initXdgDesktopPortal() {
         DEBUG_SCREENCAST("Failed to get ScreenCast portal: %s", err->message);
         ERR_HANDLE(err);
         return FALSE;
+    } else {
+        DEBUG_SCREENCAST("%s: connection/sender name %s / %s\n",
+                         "ScreenCast", name,
+                         portal->senderName);
     }
 
-    return checkVersion();
+    if (isRemoteDesktop) {
+        portal->remoteDesktopProxy = gtk->g_dbus_proxy_new_sync(
+                portal->connection,
+                G_DBUS_PROXY_FLAGS_NONE,
+                NULL,
+                "org.freedesktop.portal.Desktop",
+                "/org/freedesktop/portal/desktop",
+                "org.freedesktop.portal.RemoteDesktop",
+                NULL,
+                &err
+        );
+
+        if (err) {
+            DEBUG_SCREENCAST("Failed to get ScreenCast portal: %s", err->message);
+            ERR_HANDLE(err);
+            return FALSE;
+        } else {
+            DEBUG_SCREENCAST("%s: connection/sender name %s / %s\n",
+                             "RemoteDesktop", name,
+                             portal->senderName); //TODO really needed
+        }
+    }
+
+    return checkVersion(); //TODO update checkVersion to also check RemoteDesktop
 }
 
 static void updateRequestPath(
@@ -383,13 +414,16 @@ static void callbackScreenCastCreateSession(
     if (status != 0) {
         DEBUG_SCREENCAST("Failed to create ScreenCast: %u\n", status);
     } else {
-        gtk->g_variant_lookup(result, "session_handle", "s", helper->data);
+        gboolean returned = gtk->g_variant_lookup(result, "session_handle", "s", helper->data);
+        DEBUG_SCREENCAST("session_handle returned %b %p\n", returned, helper->data)
     }
 
     helper->isDone = TRUE;
     callbackEnd();
 }
 
+
+//TODO rename
 gboolean portalScreenCastCreateSession() {
     GError *err = NULL;
 
@@ -430,6 +464,9 @@ gboolean portalScreenCastCreateSession() {
             gtk->g_variant_new_string(requestToken)
     );
 
+
+    DEBUG_SCREENCAST("sessionToken %s \n", sessionToken)
+
     gtk->g_variant_builder_add(
             &builder,
             "{sv}",
@@ -437,8 +474,16 @@ gboolean portalScreenCastCreateSession() {
             gtk->g_variant_new_string(sessionToken)
     );
 
+    GDBusProxy *proxy = isRemoteDesktop ? portal->remoteDesktopProxy : portal->screenCastProxy;
+
+    DEBUG_SCREENCAST("portalScreenCastCreateSession: proxy %s %p (rd: %p / sc: %p)\n",
+                     isRemoteDesktop ? "remoteDesktop" : "screencast",
+                     proxy,
+                     portal->remoteDesktopProxy,
+                     portal->screenCastProxy);
+
     GVariant *response = gtk->g_dbus_proxy_call_sync(
-            portal->screenCastProxy,
+            isRemoteDesktop ? portal->remoteDesktopProxy : portal->screenCastProxy,
             "CreateSession",
             gtk->g_variant_new("(a{sv})", &builder),
             G_DBUS_CALL_FLAGS_NONE,
@@ -447,6 +492,8 @@ gboolean portalScreenCastCreateSession() {
             &err
     );
 
+    print_gvariant_content(response); //TODO
+
     if (err) {
         DEBUG_SCREENCAST("Failed to create ScreenCast session: %s\n",
                          err->message);
@@ -454,6 +501,8 @@ gboolean portalScreenCastCreateSession() {
     } else {
         waitForCallback(&helper);
     }
+
+    DEBUG_SCREENCAST("portal->screenCastSessionHandle %s\n", portal->screenCastSessionHandle);
 
     unregisterScreenCastCallback(&helper);
     if (response) {
@@ -487,6 +536,41 @@ static void callbackScreenCastSelectSources(
 
     if (status != 0) {
         DEBUG_SCREENCAST("Failed select sources: %u\n", status);
+    } else {
+        helper->data = (void *) 1;
+    }
+
+    helper->isDone = TRUE;
+
+    if (result) {
+        gtk->g_variant_unref(result);
+    }
+
+    callbackEnd();
+}
+
+static void callbackRemoteDesktopSelectDevices(
+        GDBusConnection *connection,
+        const char *senderName,
+        const char *objectPath,
+        const char *interfaceName,
+        const char *signalName,
+        GVariant *parameters,
+        void *data
+) {
+    struct DBusCallbackHelper *helper = data;
+
+    helper->data = (void *) 0;
+
+    uint32_t status;
+    GVariant* result = NULL;
+
+    //TODO recheck
+
+    gtk->g_variant_get(parameters, "(u@a{sv})", &status, &result);
+
+    if (status != 0) {
+        DEBUG_SCREENCAST("Failed select devices: %u\n", status);
     } else {
         helper->data = (void *) 1;
     }
@@ -548,20 +632,28 @@ gboolean portalScreenCastSelectSources(const gchar *token) {
     // 0: Do not persist (default)
     // 1: Permissions persist as long as the application is running
     // 2: Permissions persist until explicitly revoked
-    gtk->g_variant_builder_add(
-            &builder,
-            "{sv}",
-            "persist_mode",
-            gtk->g_variant_new_uint32(2)
-    );
 
+    if (!isRemoteDesktop) {
+        gtk->g_variant_builder_add(
+                &builder,
+                "{sv}",
+                "persist_mode",
+                gtk->g_variant_new_uint32(2)
+        );
+    }
+
+    DEBUG_SCREENCAST(">>> token: %s\n", token);
+
+    if (!isRemoteDesktop) { //TODO
     if (validateToken(token)) {
+        DEBUG_SCREENCAST(">>> adding token %s\n", token);
         gtk->g_variant_builder_add(
                 &builder,
                 "{sv}",
                 "restore_token",
                 gtk->g_variant_new_string(token)
         );
+    }
     }
 
     GVariant *response = gtk->g_dbus_proxy_call_sync(
@@ -573,6 +665,8 @@ gboolean portalScreenCastSelectSources(const gchar *token) {
             NULL,
             &err
     );
+
+    print_gvariant_content(response); //TODO
 
     if (err) {
         DEBUG_SCREENCAST("Failed to call SelectSources: %s\n", err->message);
@@ -589,6 +683,8 @@ gboolean portalScreenCastSelectSources(const gchar *token) {
     free(requestPath);
     free(requestToken);
 
+    DEBUG_SCREENCAST(">> %p\n", helper.data); //TODO
+
     return helper.data != NULL;
 }
 
@@ -601,6 +697,7 @@ static void callbackScreenCastStart(
         GVariant *parameters,
         void *data
 ) {
+    DEBUG_SCREENCAST("VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV\n", NULL); //TODO
     struct DBusCallbackHelper *helper = data;
     struct StartHelper *startHelper = helper->data;
 
@@ -706,7 +803,7 @@ ScreenCastResult portalScreenCastStart(const gchar *token) {
     );
 
     GVariant *response = gtk->g_dbus_proxy_call_sync(
-            portal->screenCastProxy,
+            portal->remoteDesktopProxy,
             "Start",
             gtk->g_variant_new("(osa{sv})", portal->screenCastSessionHandle, "", &builder),
             G_DBUS_CALL_FLAGS_NONE,
@@ -714,6 +811,8 @@ ScreenCastResult portalScreenCastStart(const gchar *token) {
             NULL,
             &err
     );
+
+    print_gvariant_content(response); //TODO
 
     if (err) {
         DEBUG_SCREENCAST("Failed to start session: %s\n", err->message);
@@ -800,6 +899,8 @@ int portalScreenCastOpenPipewireRemote() {
     return fd;
 }
 
+
+// TODO check
 void portalScreenCastCleanup() {
     if (!portal) {
         return;
@@ -889,6 +990,101 @@ gboolean checkCanCaptureAllRequiredScreens(GdkRectangle *affectedBounds,
     return true;
 }
 
+gboolean remoteDesktopSelectDevicesIfNeeded(const gchar* token) {
+    if (!isRemoteDesktop || !portal->remoteDesktopProxy) {
+        //TODO
+        DEBUG_SCREENCAST("Skipping, remote desktop is not selected \n", NULL);
+        return TRUE;
+    }
+
+    GError* err = NULL;
+
+    gchar *requestPath = NULL;
+    gchar *requestToken = NULL;
+
+    struct DBusCallbackHelper helper = {0};
+
+
+    updateRequestPath(
+            &requestPath,
+            &requestToken
+    );
+
+    registerScreenCastCallback(
+            requestPath,
+            &helper,
+            callbackRemoteDesktopSelectDevices
+    );
+
+    GVariantBuilder builder;
+
+    gtk->g_variant_builder_init(
+            &builder,
+            G_VARIANT_TYPE_VARDICT
+    );
+
+    gtk->g_variant_builder_add(
+            &builder,
+            "{sv}", "handle_token",
+            gtk->g_variant_new_string(requestToken)
+    );
+
+    // 1: KEYBOARD
+    // 2: POINTER
+    // 4: TOUCHSCREEN
+    gtk->g_variant_builder_add(
+            &builder, "{sv}", "types",
+            gtk->g_variant_new_uint32(1 | 2 /* | 4 */) //TODO ?
+    );
+
+    // 0: Do not persist (default)
+    // 1: Permissions persist as long as the application is running
+    // 2: Permissions persist until explicitly revoked
+    gtk->g_variant_builder_add(
+            &builder,
+            "{sv}",
+            "persist_mode",
+            gtk->g_variant_new_uint32(2)
+    );
+
+    if (validateToken(token)) {
+        gtk->g_variant_builder_add(
+                &builder,
+                "{sv}",
+                "restore_token",
+                gtk->g_variant_new_string(token)
+        );
+    }
+
+    GVariant *response = gtk->g_dbus_proxy_call_sync(
+            portal->remoteDesktopProxy,
+            "SelectDevices",
+            gtk->g_variant_new("(oa{sv})", portal->screenCastSessionHandle, &builder),
+            G_DBUS_CALL_FLAGS_NONE,
+            -1,
+            NULL,
+            &err
+    );
+
+    print_gvariant_content(response); //TODO
+
+    if (err) {
+        DEBUG_SCREENCAST("Failed to call SelectDevices: %s\n", err->message);
+        ERR_HANDLE(err);
+    } else {
+        waitForCallback(&helper);
+    }
+
+    unregisterScreenCastCallback(&helper);
+    if (response) {
+        gtk->g_variant_unref(response);
+    }
+
+    free(requestPath);
+    free(requestToken);
+
+    return helper.data != NULL;
+}
 
 int getPipewireFd(const gchar *token,
                   GdkRectangle *affectedBounds,
@@ -900,6 +1096,10 @@ int getPipewireFd(const gchar *token,
 
     if (!portalScreenCastSelectSources(token)) {
         DEBUG_SCREENCAST("Failed to select sources\n", NULL);
+        return RESULT_ERROR;
+    }
+
+    if (!remoteDesktopSelectDevicesIfNeeded(token)) {
         return RESULT_ERROR;
     }
 
@@ -920,7 +1120,7 @@ int getPipewireFd(const gchar *token,
 
     DEBUG_SCREENCAST("--- portalScreenCastStart\n", NULL);
 
-    int pipewireFd = portalScreenCastOpenPipewireRemote();
+    int pipewireFd = portalScreenCastOpenPipewireRemote(); //TODO if screenshot only
     if (pipewireFd < 0) {
         DEBUG_SCREENCAST("!!! Failed to get pipewire fd\n", NULL);
     }
@@ -928,4 +1128,155 @@ int getPipewireFd(const gchar *token,
     DEBUG_SCREENCAST("pwFd %i\n", pipewireFd);
     return pipewireFd;
 }
+
+
+void print_gvariant_content(GVariant *response) {
+    if (response == NULL) {
+        DEBUG_SCREENCAST("Response is NULL\n", NULL);
+        return;
+    }
+
+    gchar *str = gtk->g_variant_print(response, TRUE);
+    DEBUG_SCREENCAST("\n---------------\nResponse: %s\n--------------\n", str);
+    gtk->g_free(str);
+}
+
+static void callRemoteDesktop(const gchar* methodName, GVariant *params) {
+    GError *err = NULL;
+    GVariantBuilder builder; // TODO save it somewhere
+    gtk->g_variant_builder_init (&builder, G_VARIANT_TYPE_VARDICT);
+
+    GVariant *response = gtk->g_dbus_proxy_call_sync(
+            portal->remoteDesktopProxy,
+            methodName,
+            params,
+            G_DBUS_CALL_FLAGS_NONE,
+            -1,
+            NULL,
+            &err
+    );
+
+    print_gvariant_content(response);
+
+    DEBUG_SCREENCAST("%s: response %p err %p\n", methodName, response, err);
+
+    if (err) {
+        DEBUG_SCREENCAST("Failed to call %s: %s\n", methodName, err->message);
+        ERR_HANDLE(err);
+    }
+}
+
+void remoteDesktopMouseMove(int x, int y) {
+    DEBUG_SCREENCAST("mouseMove %d %d\n", x, y);
+
+    guint32 streamId = 0;
+
+    int relX = -1;
+    int relY = -1;
+
+    for (int i = 0; i < screenSpace.screenCount; ++i) {
+        struct ScreenProps *screenProps = &screenSpace.screens[i];
+        GdkRectangle rect = screenProps->bounds;
+
+        if (x >= rect.x &&
+             y >= rect.y &&
+             x <  rect.x + rect.width &&
+             y <  rect.y + rect.height) {
+            streamId = screenProps->id;
+            relX = x - rect.x;
+            relY = y - rect.y;
+
+            DEBUG_SCREENCAST("screenId#%i point %dx%d (rel %i %i) inside of screen (%d, %d, %d, %d)\n",
+                             streamId,
+                             x, y, relX, relY,
+                             rect.x, rect.y, rect.width, rect.height);
+
+
+            break;
+        }
+    }
+
+    if (streamId == 0) {
+        //TODO add clamping
+        DEBUG_SCREENCAST("outside of available screens\n", NULL);
+        return;
+    }
+
+    GVariantBuilder builder;
+    gtk->g_variant_builder_init (&builder, G_VARIANT_TYPE_VARDICT);
+    GVariant *params = gtk->g_variant_new("(oa{sv}udd)", portal->screenCastSessionHandle, &builder,
+                                          streamId, (double) relX, (double) relY);
+    callRemoteDesktop("NotifyPointerMotionAbsolute", params);
+}
+
+void remoteDesktopMouse(gboolean isPress, int buttons) {
+    // see java.awt.event.InputEvent#BUTTON_DOWN_MASK
+    static const int AWT_SHIFT_START = 10;
+
+    // TODO document it
+
+    // BTN_LEFT    = 0x110 - awt button1
+    // BTN_RIGHT   = 0x111 - awt button3
+    // BTN_MIDDLE  = 0x112 - awt button2
+    // BTN_SIDE    = 0x113 //TODO recheck
+    // BTN_EXTRA   = 0x114
+    // BTN_FORWARD = 0x115
+    // BTN_BACK    = 0x116
+    // BTN_TASK    = 0x117
+
+    // AWT mask 1 << 10 -> 0x110 evdev Button1
+    // AWT mask 2 << 11 -> 0x112 evdev Button3
+    // AWT mask 3 << 12 -> 0x111 evdev Button2
+    // ...
+    // AWT mask 7 << 17 -> 0x117
+
+    if (buttons & java_awt_event_InputEvent_BUTTON1_MASK) {
+        buttons |= java_awt_event_InputEvent_BUTTON1_DOWN_MASK;
+    }
+    if (buttons & java_awt_event_InputEvent_BUTTON2_MASK) {
+        buttons |= java_awt_event_InputEvent_BUTTON2_DOWN_MASK;
+    }
+    if (buttons & java_awt_event_InputEvent_BUTTON3_MASK) {
+        buttons |= java_awt_event_InputEvent_BUTTON3_DOWN_MASK;
+    }
+
+    for (int i = 0; i < 8; ++i) {
+        int awtMask = 1 << (AWT_SHIFT_START + i);
+        if (awtMask & buttons) {
+            // AWT button 2 and 3 are mixed up with evdev 2 and 3
+            int modifier = (i == 1) ? 1 : (i == 2) ? -1 : 0;
+            // TODO check mouse extra buttons
+
+            // The pointer button is encoded according to Linux Evdev button codes.
+            int evdevButton = 0x110 + i + modifier;
+            DEBUG_SCREENCAST("MouseMask buttons %d %d Condition: %d -> 0x%X\n",
+                             buttons, awtMask, awtMask & buttons, evdevButton);
+
+            GVariantBuilder builder;
+            gtk->g_variant_builder_init(&builder, G_VARIANT_TYPE_VARDICT);
+            GVariant *params = gtk->g_variant_new("(oa{sv}iu)",
+                                                  portal->screenCastSessionHandle, &builder, evdevButton, isPress);
+            callRemoteDesktop("NotifyPointerButton", params);
+        }
+    }
+}
+
+void remoteDesktopMouseWheel(int wheelAmt) {
+    DEBUG_SCREENCAST("MouseWheel %d\n", wheelAmt);
+
+    GVariantBuilder builder;
+    gtk->g_variant_builder_init(&builder, G_VARIANT_TYPE_VARDICT);
+    GVariant *params = gtk->g_variant_new("(oa{sv}ui)", portal->screenCastSessionHandle, &builder, 0, wheelAmt);
+    callRemoteDesktop("NotifyPointerAxisDiscrete", params);
+}
+
+void remoteDesktopKey(gboolean isPress, int key) {
+    DEBUG_SCREENCAST("Key%s key %d -> \n", isPress ? "Press" : "Release", key);
+
+    GVariantBuilder builder;
+    gtk->g_variant_builder_init(&builder, G_VARIANT_TYPE_VARDICT);
+    GVariant *params = gtk->g_variant_new ("(oa{sv}iu)", portal->screenCastSessionHandle, &builder, key, isPress);
+    callRemoteDesktop("NotifyKeyboardKeysym", params);
+}
+
 #endif

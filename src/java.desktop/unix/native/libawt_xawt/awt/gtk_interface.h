@@ -678,6 +678,7 @@ typedef struct GtkApi {
     GVariant *(*g_variant_new_boolean)(gboolean value);
     GVariant *(*g_variant_new_uint32)(guint32 value);
 
+    gchar *(*g_variant_print) (GVariant* value, gboolean type_annotate);
 
     void (*g_variant_get)(GVariant *value,
                                     const gchar *format_string,

@@ -33,7 +33,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import static sun.awt.screencast.ScreencastHelper.SCREENCAST_DEBUG;
+import static sun.awt.screencast.ScreencastHelper.IS_DEBUG;
 
 /**
  * Helper class used by {@link TokenStorage} as restore token record
@@ -136,7 +136,7 @@ final class TokenItem {
             }
         } catch (NumberFormatException ignored) {}
 
-        if (SCREENCAST_DEBUG) {
+        if (IS_DEBUG) {
             System.err.printf("Malformed record for token %s: %s\n",
                     token, input);
         }

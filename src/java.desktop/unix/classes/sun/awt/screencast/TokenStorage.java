@@ -41,6 +41,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
 import java.util.Set;
@@ -49,7 +50,7 @@ import static java.nio.file.StandardWatchEventKinds.ENTRY_CREATE;
 import static java.nio.file.StandardWatchEventKinds.ENTRY_DELETE;
 import static java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY;
 import static java.nio.file.StandardWatchEventKinds.OVERFLOW;
-import static sun.awt.screencast.ScreencastHelper.SCREENCAST_DEBUG;
+import static sun.awt.screencast.ScreencastHelper.IS_DEBUG;
 
 /**
  * Helper class for persistent storage of ScreenCast restore tokens
@@ -67,18 +68,19 @@ final class TokenStorage {
     private static final String REL_NAME_SECONDARY =
             ".awt/robot/screencast-tokens.properties";
 
+    private static final String REL_RD_NAME =
+            ".java/robot/remote-desktop-tokens.properties";
+
     private static final Properties PROPS = new Properties();
     private static final Path PROPS_PATH;
     private static final Path PROP_FILENAME;
 
     static {
-        Path propsPath = setupPath();
-
-        PROPS_PATH = propsPath;
+        PROPS_PATH = setupPath();
 
         if (PROPS_PATH != null) {
             PROP_FILENAME = PROPS_PATH.getFileName();
-            if (SCREENCAST_DEBUG) {
+            if (IS_DEBUG) {
                 System.out.println("Token storage: using " + PROPS_PATH);
             }
             setupWatch();
@@ -95,11 +97,18 @@ final class TokenStorage {
             return null;
         }
 
-        Path path = Path.of(userHome, REL_NAME);
-        Path secondaryPath = Path.of(userHome, REL_NAME_SECONDARY);
+        Path path;
+        Path secondaryPath = null;
+
+        if (XdgDesktopPortal.isRemoteDesktop()) {
+            path = Path.of(userHome, REL_RD_NAME);
+        } else {
+            path = Path.of(userHome, REL_NAME);
+            secondaryPath = Path.of(userHome, REL_NAME_SECONDARY);
+        }
 
         boolean copyFromSecondary = !Files.isWritable(path)
-                && Files.isWritable(secondaryPath);
+                && secondaryPath != null && Files.isWritable(secondaryPath);
 
         Path workdir = path.getParent();
 
@@ -108,7 +117,7 @@ final class TokenStorage {
                 try {
                     Files.createDirectories(workdir);
                 } catch (Exception e) {
-                    if (SCREENCAST_DEBUG) {
+                    if (IS_DEBUG) {
                         System.err.printf("Token storage: cannot create" +
                                 " directory %s %s\n", workdir, e);
                     }
@@ -117,7 +126,7 @@ final class TokenStorage {
             }
 
             if (!Files.isWritable(workdir)) {
-                if (SCREENCAST_DEBUG) {
+                if (IS_DEBUG) {
                     System.err.printf("Token storage: %s is not writable\n", workdir);
                 }
                 return null;
@@ -132,14 +141,14 @@ final class TokenStorage {
                            PosixFilePermission.OWNER_EXECUTE)
             );
         } catch (IOException e) {
-            if (SCREENCAST_DEBUG) {
+            if (IS_DEBUG) {
                 System.err.printf("Token storage: cannot set permissions " +
                         "for directory %s %s\n", workdir, e);
             }
         }
 
         if (copyFromSecondary) {
-            if (SCREENCAST_DEBUG) {
+            if (IS_DEBUG) {
                 System.out.println("Token storage: copying from the secondary location "
                                         + secondaryPath);
             }
@@ -168,7 +177,7 @@ final class TokenStorage {
             );
             return true;
         } catch (IOException e) {
-            if (SCREENCAST_DEBUG) {
+            if (IS_DEBUG) {
                 System.err.printf("Token storage: failed to set " +
                         "property file permission %s %s\n", path, e);
             }
@@ -187,7 +196,7 @@ final class TokenStorage {
 
         @Override
         public void run() {
-            if (SCREENCAST_DEBUG) {
+            if (IS_DEBUG) {
                 System.out.println("ScreencastWatcher: started");
             }
             for (;;) {
@@ -195,7 +204,7 @@ final class TokenStorage {
                 try {
                     key = watcher.take();
                 } catch (InterruptedException e) {
-                    if (SCREENCAST_DEBUG) {
+                    if (IS_DEBUG) {
                         System.err.println("ScreencastWatcher: interrupted");
                     }
                     return;
@@ -208,7 +217,7 @@ final class TokenStorage {
                         continue;
                     }
 
-                    if (SCREENCAST_DEBUG) {
+                    if (IS_DEBUG) {
                         System.out.printf("ScreencastWatcher: %s %s\n",
                                 kind, event.context());
                     }
@@ -244,7 +253,7 @@ final class TokenStorage {
                             ENTRY_MODIFY);
 
         } catch (Exception e) {
-            if (SCREENCAST_DEBUG) {
+            if (IS_DEBUG) {
                 System.err.printf("Token storage: failed to setup " +
                         "file watch %s\n", e);
             }
@@ -259,7 +268,7 @@ final class TokenStorage {
     private static void storeTokenFromNative(String oldToken,
                                              String newToken,
                                              int[] allowedScreenBounds) {
-        if (SCREENCAST_DEBUG) {
+        if (IS_DEBUG) {
             System.out.printf("// storeToken old: |%s| new |%s| " +
                             "allowed bounds %s\n",
                     oldToken, newToken,
@@ -270,7 +279,7 @@ final class TokenStorage {
 
         TokenItem tokenItem = new TokenItem(newToken, allowedScreenBounds);
 
-        if (SCREENCAST_DEBUG) {
+        if (IS_DEBUG) {
             System.out.printf("// Storing TokenItem:\n%s\n", tokenItem);
         }
 
@@ -283,7 +292,7 @@ final class TokenStorage {
             if (oldBoundsRecord == null
                     || !oldBoundsRecord.equals(newBoundsRecord)) {
                 PROPS.setProperty(tokenItem.token, newBoundsRecord);
-                if (SCREENCAST_DEBUG) {
+                if (IS_DEBUG) {
                     System.out.printf(
                             "// Writing new TokenItem:\n%s\n", tokenItem);
                 }
@@ -292,7 +301,7 @@ final class TokenStorage {
 
             if (oldToken != null && !oldToken.equals(newToken)) {
                 // old token is no longer valid
-                if (SCREENCAST_DEBUG) {
+                if (IS_DEBUG) {
                     System.out.printf(
                             "// storeTokenFromNative old token |%s| is "
                                     + "no longer valid, removing\n", oldToken);
@@ -317,7 +326,7 @@ final class TokenStorage {
                 PROPS.load(reader);
             }
         } catch (IOException | IllegalArgumentException e) {
-            if (SCREENCAST_DEBUG) {
+            if (IS_DEBUG) {
                 System.err.printf("""
                         Token storage: failed to load property file %s
                         %s
@@ -327,6 +336,12 @@ final class TokenStorage {
         }
 
         return true;
+    }
+
+    static TokenItem getFirstToken() { //TODO
+        String firstKey = PROPS.stringPropertyNames().stream().findFirst().orElse(null);
+        String firstValue = firstKey != null ? PROPS.getProperty(firstKey) : null;
+        return TokenItem.parse(firstKey, firstValue);
     }
 
     static Set<TokenItem> getTokens(List<Rectangle> affectedScreenBounds) {
@@ -369,7 +384,7 @@ final class TokenStorage {
             }
         }
 
-        if (SCREENCAST_DEBUG) {
+        if (IS_DEBUG) {
             System.out.println("// getTokens exact matches 1. " + result);
         }
 
@@ -392,7 +407,7 @@ final class TokenStorage {
             }
         }
 
-        if (SCREENCAST_DEBUG) {
+        if (IS_DEBUG) {
             System.out.println("// getTokens same sizes 2. " + result);
         }
 
@@ -420,7 +435,7 @@ final class TokenStorage {
         synchronized (PROPS) {
             for (String token : malformedRecords) {
                 Object remove = PROPS.remove(token);
-                if (SCREENCAST_DEBUG) {
+                if (IS_DEBUG) {
                     System.err.println("removing malformed record\n" + remove);
                 }
             }
@@ -438,7 +453,7 @@ final class TokenStorage {
             try (BufferedWriter writer = Files.newBufferedWriter(path)) {
                 PROPS.store(writer, null);
             } catch (IOException e) {
-                if (SCREENCAST_DEBUG) {
+                if (IS_DEBUG) {
                     System.err.printf(
                             "Token storage: unable to %s\n%s\n", failMsg, e);
                 }
@@ -450,7 +465,7 @@ final class TokenStorage {
         if (path == null
             || (Files.exists(path) && !Files.isWritable(path))) {
 
-            if (SCREENCAST_DEBUG) {
+            if (IS_DEBUG) {
                 System.err.printf(
                         "Token storage: %s is not writable\n", path);
             }

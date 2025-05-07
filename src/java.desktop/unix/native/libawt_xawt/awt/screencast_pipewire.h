@@ -41,6 +41,8 @@
 
 void storeRestoreToken(const gchar* oldToken, const gchar* newToken);
 
+void print_gvariant_content(GVariant *response);
+
 struct ScreenProps {
     guint32 id;
     GdkRectangle bounds;
