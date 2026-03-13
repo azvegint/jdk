@@ -23,7 +23,7 @@
 
 /*
  * @test
- * @bug 8041928 8158616
+ * @bug 8041928 8158616 8376050
  * @requires (os.family != "mac")
  * @summary Confirm that the Alt-Gr Modifier bit is set correctly.
  * @library /java/awt/regtesthelpers
